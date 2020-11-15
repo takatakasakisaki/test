@@ -1,12 +1,12 @@
-How-to-use-OpenBLAS-in-Microsoft-Visual-Studio
+#How-to-use-OpenBLAS-in-Microsoft-Visual-Studio
 
 https://github.com/xianyi/OpenBLAS/wiki/How-to-use-OpenBLAS-in-Microsoft-Visual-Studio
 
-:download 
+#download 
 https://github.com/xianyi/OpenBLAS/releases
 OpenBLAS-0.3.12.tar.gz
 
-:prepair
+#prepair
 
 open anaconda command prompt
 conda update -n base conda
@@ -31,7 +31,7 @@ cmake --build . --config Release
 
 cmake --install . --prefix c:\opt -v
 
-## Test
+# Test
 
 tes.c
 
@@ -50,6 +50,6 @@ void main()
     printf("%lf ", C[i]);
   printf("\n");
 }
-
+#compile
 cl /MT tes.c -Ic:\opt\include\openblas build\lib\Release\openblas.lib
 
