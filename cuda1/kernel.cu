@@ -154,6 +154,7 @@ void kernel_init()
     cudaError_t cudaStatus;
     int pitch = 2440;
     int height = 220;
+#if 0
 	// Allocate GPU buffers for three vectors (two input, one output)    .
 	cudaStatus = cudaMalloc((void**)&dev_dest, pitch * sizeof(uint8_t)*height);
 	if (cudaStatus != cudaSuccess) {
@@ -168,11 +169,30 @@ void kernel_init()
 	if (cudaStatus != cudaSuccess) {
 		fprintf(stderr, "cudaMalloc failed!");
 	}
-
 	cudaStatus = cudaMalloc((void**)&dev_in, pitch * sizeof(uint8_t) * height);
 	if (cudaStatus != cudaSuccess) {
 		fprintf(stderr, "cudaMalloc failed!");
 	}
+#else
+	// Allocate GPU buffers for three vectors (two input, one output)    .
+	cudaStatus = cudaMallocManaged((void**)&dev_dest, pitch * sizeof(uint8_t)*height);
+	if (cudaStatus != cudaSuccess) {
+		fprintf(stderr, "cudaMalloc failed!");
+	}
+	// Allocate GPU buffers for three vectors (two input, one output)    .
+	cudaStatus = cudaMallocManaged((void**)&dev_maxval, pitch * sizeof(uint8_t));
+	if (cudaStatus != cudaSuccess) {
+		fprintf(stderr, "cudaMalloc failed!");
+	}
+	cudaStatus = cudaMallocManaged((void**)&dev_minval, pitch * sizeof(uint8_t));
+	if (cudaStatus != cudaSuccess) {
+		fprintf(stderr, "cudaMalloc failed!");
+	}
+	cudaStatus = cudaMallocManaged((void**)&dev_in, pitch * sizeof(uint8_t) * height);
+	if (cudaStatus != cudaSuccess) {
+		fprintf(stderr, "cudaMalloc failed!");
+	}
+#endif
 }
 // convert contrast
 int convcontrast_cpu(uint8_t *dest, const uint8_t *in, unsigned int height, uint8_t max_val, uint8_t min_val)
@@ -519,7 +539,7 @@ int main()
         fprintf(stderr, "cudaDeviceReset failed!");
         return 1;
     }
-
+    getchar();
     return 0;
 }
 
