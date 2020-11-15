@@ -14,7 +14,9 @@ conda config --add channels conda-forge
 conda install -y cmake flang clangdev perl libflang ninja
 
 "c:/Program Files (x86)/Microsoft Visual Studio/2017/Community/VC/Auxiliary/Build/vcvars64.bat"
+
 or
+
 "c:/Program Files (x86)/Microsoft Visual Studio/2019/Community/VC/Auxiliary/Build/vcvars64.bat"
 
 tar xf OpenBLAS-0.3.12.tar.gz
@@ -24,10 +26,17 @@ set "CPATH=%CONDA_PREFIX%\Library\include;%CPATH%"
 mkdir build
 cd build
 
-- arg "-DDYNAMIC_ARCH=ON" is  to use static crt.     cl /MT  is to use static libc   , cl /MD is to use msvcrt.dll   
+- arg "-DDYNAMIC_ARCH=ON" is  to use static crt.     
+    cl /MT  
+    is to use static libc   
+
+    cl /MD 
+    is to use msvcrt.dll   
+
 cmake .. -G "Ninja" -DCMAKE_CXX_COMPILER=clang-cl -DCMAKE_C_COMPILER=clang-cl -DCMAKE_Fortran_COMPILER=flang -DBUILD_WITHOUT_LAPACK=no -DNOFORTRAN=0 -DDYNAMIC_ARCH=ON -DCMAKE_BUILD_TYPE=Release
 
 cmake --build . --config Release
+
 ## install
 cmake --install . --prefix c:\opt -v
 
