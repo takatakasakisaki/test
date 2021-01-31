@@ -358,7 +358,7 @@ cudaError_t verticalave_gpu(uint8_t *dest, const uint8_t *in, unsigned int heigh
 }
 cudaError_t verticalave_cpu(uint8_t *dest, const uint8_t *in, unsigned int height)
 {
-    cudaError_t cudaStatus;
+    cudaError_t cudaStatus= cudaSuccess;
 
     int pitch = 2440;
     uint8_t max_val[2440];
@@ -389,6 +389,113 @@ __global__ void addKernel(int *dest, const int *a, const int *b)
     printf("a=%d,b=%d,c=%d\n", a0, b0, c0);
 
 }
+
+__global__ void convvalue_kernel(uint8_t* dest, const uint8_t* input, const int height, const int bpl, float value)
+{
+    int col = blockDim.x*blockIdx.x + threadIdx.x;
+    if (col < 1920) {
+        //int pos = col;
+        for (int row = 0; row < height; row++) {
+            int pos = row * bpl + col * 3;
+            uint8_t c0 =input[pos+0]; 
+            uint8_t c1 =input[pos+1]; 
+            uint8_t c2 =input[pos+2]; 
+            float o0 = c0 * value;
+            float o1 = c1 * value;
+            float o2 = c2 * value;
+            if (o0 > 255) {
+                o0 = 255;
+            }
+            if (o1 > 255) {
+                o1 = 255;
+            }
+            if (o2 > 255) {
+                o2 = 255;
+            }
+            dest[pos+0] = o0;
+            dest[pos+1] = o1;
+            dest[pos+2] = o2;
+        }
+    }
+}
+uint8_t *dev_in_value = nullptr;
+uint8_t *dev_out_value = nullptr;
+void initconv_value()
+{
+    cudaError_t cudaStatus;
+	//cudaStatus = cudaMallocManaged((void**)&dev_in_value, 1920*1200 * 3 );
+	cudaStatus = cudaMalloc((void**)&dev_in_value, 1920*1200 * 3 );
+	if (cudaStatus != cudaSuccess) {
+		fprintf(stderr, "cudaMalloc failed!");
+	}
+	//cudaStatus = cudaMallocManaged((void**)&dev_out_value, 1920*1200 * 3 );
+	cudaStatus = cudaMalloc((void**)&dev_out_value, 1920*1200 * 3 );
+	if (cudaStatus != cudaSuccess) {
+		fprintf(stderr, "cudaMalloc failed!");
+	}
+}
+
+cudaError_t convvalue_gpu(uint8_t in[], uint8_t out[], unsigned int height, int bpl, float ratio, bool incopy, bool outcopy)
+{
+    cudaError_t cudaStatus;
+    printf("%d,%d,%f", height, bpl, ratio);
+
+    do {
+
+        if (incopy) {
+            // Copy input vectors from host memory to GPU buffers.
+            cudaStatus = cudaMemcpy(dev_in_value, in, height * bpl, cudaMemcpyHostToDevice);
+            if (cudaStatus != cudaSuccess) {
+                fprintf(stderr, "cudaMemcpy failed!");
+                break;
+            }
+        }
+        auto t0 = std::chrono::system_clock::now();
+        // Launch a kernel on the GPU with one thread for each element.
+        //dev_c dest
+        // c = a + b
+        int thnum = 128;
+        //int thnum = 256;
+        dim3 blkdim(thnum, 1, 1);
+        dim3 grid((1920 + thnum - 1) / thnum, 1, 1);
+        //makecontrast_kernel<<< grid, blkdim >>> ((uchar4*)dev_dest, (uchar4*)dev_in, height, max_val, min_val);
+        convvalue_kernel<<< grid, blkdim >>> (dev_out_value, dev_in_value, height, bpl, ratio);
+        //__global__ void makecontrast(uchar4* dest, const uchar4* input, const int height, uint8_t max_val, uint8_t min_val)
+
+
+        // Check for any errors launching the kernel
+        cudaStatus = cudaGetLastError();
+        if (cudaStatus != cudaSuccess) {
+            fprintf(stderr, "addKernel launch failed: %s\n", cudaGetErrorString(cudaStatus));
+			break;
+        }
+        if (outcopy) {
+            // Copy output vector from GPU buffer to host memory.
+            cudaStatus = cudaMemcpy(out, dev_out_value, height * bpl, cudaMemcpyDeviceToHost);
+            if (cudaStatus != cudaSuccess) {
+                fprintf(stderr, "cudaMemcpy failed!");
+                break;
+            }
+        }
+
+        // cudaDeviceSynchronize waits for the kernel to finish, and returns
+        // any errors encountered during the launch.
+        cudaStatus = cudaDeviceSynchronize();
+        if (cudaStatus != cudaSuccess) {
+            fprintf(stderr, "cudaDeviceSynchronize returned error code %d after launching addKernel!\n", cudaStatus);
+			break;
+        }
+        auto t1 = std::chrono::system_clock::now();
+        std::chrono::duration<double> diff = t1 - t0;
+        printf("convvalue gpu t=%f\n", diff.count() * 1000);
+        std::fflush(stdout);
+    } while (0);
+
+//Error:
+    return cudaStatus;
+}
+
+
 // Helper function for using CUDA to add vectors in parallel.
 cudaError_t addWithCuda(int *c, const int *a, const int *b, unsigned int array_size)
 {
@@ -463,6 +570,90 @@ Error:
     
     return cudaStatus;
 }
+// binning horizontal and vertical
+__global__ void 
+hvbin(uint8_t* src, uint8_t* dst, const int nhbin, const int nvbin, const int width_in, const int height_in, int width_out, int height_out)
+{
+    int col0 = blockDim.x*blockIdx.x + threadIdx.x;
+    int xstart = col0 * nhbin;
+    int xend = xstart + nhbin ;
+    if (xend > width_in) {
+        xend = width_in;
+    }
+    int nx = xend - xstart;
+    int yidx = 0;
+    int dstyidx = 0;
+    int dstxidx = xstart/nhbin;
+    int ysum = 0;
+    for (int y = 0; y < height_in; y++) {
+        int xsum = 0;
+        uint8_t* xinp = src + xstart + width_in*y;
+        //hbin
+        for (int x = xstart; x < xend; x++) {
+            uint8_t c = *xinp++;
+            xsum += int(c);
+        }
+        //vbin
+        ysum += xsum/nx;
+        yidx++;
+        if (yidx >= nvbin) {
+            ysum /= nvbin;
+            dst[dstyidx * width_out + dstxidx ] = ysum;
+            dstyidx++;
+            ysum = 0;
+            yidx = 0;
+        }
+    }
+
+}
+// height 2440 -> 244 is div 10  , 
+//same ratio , width -> 1/10   width/10 < 1000 , width/10 > 1000 width-> 1000 ratio so, 610x15/10 =915
+// outbuf is QImage.data    4heiretsu stream
+void bintest(uint8_t *outbuf, uint8_t * inbuf, int width_in, int height_in, int width_out, int height_out)
+{
+    //uint8_t* frame_in;
+    uint8_t* frame_out;
+    int nblk = width_in / 610;
+    //int nblk = 100;
+    //int height_in = 2440;
+    //int height_out = 244;
+    //int width_in = 610 * nblk;
+    //int width_out = 1000;
+    int nvbin = height_in / height_out;
+    int nhbin;
+    if (nblk > 15) {
+        nhbin = width_in / width_out;
+    }
+    else {
+        nhbin = nvbin;
+    }
+    int thnum = 128;
+    dim3 blkdim(thnum, 1, 1);
+    dim3 grid((width_in + thnum - 1) / thnum, 1, 1);
+    cudaMalloc((void**)&frame_out, width_out * height_out);
+    //cudaMemcpy(frame_in, inbuf, width_in* height_in * sizeof(uint8_t), cudaMemcpyHostToDevice);
+    hvbin <<< grid, blkdim >>> (inbuf, frame_out, nhbin, nvbin, width_in, height_in, width_out, height_out);
+    cudaDeviceSynchronize();
+    cudaMemcpy(outbuf, frame_out, width_out* height_out * sizeof(uint8_t), cudaMemcpyDeviceToHost);
+}
+
+
+void mymemcpy(uint64_t* dst, uint64_t* src, int len) 
+{
+    int i;
+    int row;
+    int col;
+    int stride = 1920 * 3 / 8;
+    uint64_t* d, * s;
+#pragma omp parallel for num_threads(4) private(col, d, s)
+    for (row = 0; row < 1200; row++){
+        d = dst + stride * row;
+        s = src + stride * row;
+        for (col = 0; col < (1920*3)/8; col++) {
+            d[col] = src[col];
+        }
+    }
+}
 //Š¿Žš
 int main()
 {
@@ -479,6 +670,7 @@ int main()
         return 2;
     }
     kernel_init();
+#if 0
     int pitch = 2440;
     uint8_t *avebuf = new uint8_t[pitch];
     int height = 220;
@@ -501,6 +693,8 @@ int main()
     fflush(stdout);
 //    Sleep(1);
 #endif
+#endif
+#if 0
     // Add vectors in parallel.
     cudaStatus = verticalave_gpu(avebuf, inbuf, height);
     cudaStatus = verticalave_gpu(avebuf, inbuf, height);
@@ -518,6 +712,7 @@ int main()
     convcontrast_cpu(contrastbuf, inbuf, height, 128, 1);
     convcontrast_cpu(contrastbuf, inbuf, height, 128, 1);
     convcontrast_cpu(contrastbuf, inbuf, height, 128, 1);
+#endif
 #if 0
     fflush(stdout);
     puts("\n\nave=");
@@ -528,8 +723,65 @@ int main()
         }
 	}
 #endif
+#if 0
+    initconv_value();
+    uint8_t* inbufh;
+    cudaMallocHost(&inbufh, 1920 * 1200 * 3);
+    uint8_t *outbufm;
+	cudaMallocManaged((void**)&outbufm, 1920*1200 * 3 );
+    uint8_t *outbufh;
+    cudaMallocHost(&outbufh, 1920 * 1200 * 3);
+    static uint8_t inbuf[1920 * 1200 * 3];
+    static uint8_t outbuf[1920 * 1200 * 3];
+    memset(outbuf, 0, 1920 * 1200 * 3);
+    uint8_t *outbuf_dev;
+	cudaMalloc((void**)&outbuf_dev, 1920*1200 * 3 );
+    uint8_t* inbuf_devm;
+	cudaMallocManaged((void**)&inbuf_devm, 1920*1200 * 3 );
+#if 1
+    for (int i = 0; i < 1920*1200*3; i++) {
+        inbuf[i] = i;
+        inbufh[i] = i;
+    }
+#endif
+    ///convvalue_gpu(1200, 1920*3, 10.1);
+    bool incopy = true;
+    bool outcopy = true;
+    convvalue_gpu(inbuf, outbufm, 1200, 1920*3, 10.1, incopy, outcopy);
+    convvalue_gpu(inbuf, outbuf, 1200, 1920*3, 10.1, incopy, outcopy);
+    convvalue_gpu(inbufh, outbufh, 1200, 1920*3, 10.1, incopy, outcopy);
+    incopy = false; 
+    outcopy = false;
+    dev_in_value = inbuf_devm;
+    dev_out_value = outbufm;
+    convvalue_gpu(dev_in_value, outbufm, 1200, 1920*3, 10.1, incopy, outcopy);
+    {
+        auto ts = omp_get_wtime();
+        cudaMemcpy(outbufh, outbufm, 1920 * 1200 * 3, cudaMemcpyHostToHost);
+        auto te = omp_get_wtime();
+        std::cout << te - ts <<std::endl;
+    }
+    {
+        auto ts = omp_get_wtime();
+        mymemcpy((uint64_t*)outbufh, (uint64_t*)outbufm, 1920 * 1200 * 3);
+        auto te = omp_get_wtime();
+        std::cout << te - ts << "outbufh" << outbufh << "outbufm" << outbufm <<std::endl;
+    }
+
     cudaFree(dev_dest);
     cudaFree(dev_in);
+#endif
+    {
+        int height_in = 2440;
+        int width_in = 610 * 100;
+        int width_out = 1080;
+        int height_out = 244;
+        uint8_t* outbuf = new uint8_t[width_out * height_out];
+        uint8_t* inbuf;
+	    cudaMallocManaged((void**)&inbuf, width_in*height_in );
+        bintest(outbuf, inbuf, width_in, height_in, width_out, height_out);
+    }
+
 
 
     // cudaDeviceReset must be called before exiting in order for profiling and
