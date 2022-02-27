@@ -39,7 +39,8 @@
 #include <thrust/host_vector.h>
 #include <thrust/system/cuda/experimental/pinned_allocator.h>
 #include <vector>
-
+using allocator = thrust::system::cuda::experimental::pinned_allocator<char>;
+using allocator_voidp = thrust::system::cuda::experimental::pinned_allocator<void*>;
 #define GENERATE_CHUNKED_BENCHMARK( \
     comp_get_temp, \
     comp_get_output, \
@@ -49,7 +50,7 @@
     is_input_valid, \
     format_opts) \
 void run_benchmark( \
-    const std::vector<thrust::host_vector<char,thrust::system::cuda::experimental::pinned_allocator<char>>>& data, \
+    const std::vector<thrust::host_vector<char,allocator>>& data, \
     const bool warmup, \
     const size_t count, \
     const bool csv_output, \
@@ -75,7 +76,7 @@ void run_benchmark( \
 }
 
 // A helper function for if the input data requires no validation.
-static bool inputAlwaysValid(const std::vector<thrust::host_vector<char,thrust::system::cuda::experimental::pinned_allocator<char> > >& data)
+static bool inputAlwaysValid(const std::vector<thrust::host_vector<char,allocator > >& data)
 {
   return true;
 }
@@ -88,7 +89,7 @@ namespace
 constexpr const char * const REQUIRED_PARAMTER = "_REQUIRED_";
 
 static size_t compute_batch_size(
-    const std::vector<thrust::host_vector<char,thrust::system::cuda::experimental::pinned_allocator<char>>>& data, const size_t chunk_size)
+    const std::vector<thrust::host_vector<char,allocator>>& data, const size_t chunk_size)
 {
   size_t batch_size = 0;
   for (size_t i = 0; i < data.size(); ++i) {
@@ -100,7 +101,7 @@ static size_t compute_batch_size(
 }
 
 std::vector<size_t> compute_chunk_sizes(
-    const std::vector<thrust::host_vector<char,thrust::system::cuda::experimental::pinned_allocator<char>>>& data,
+    const std::vector<thrust::host_vector<char,allocator>>& data,
     const size_t batch_size,
     const size_t chunk_size)
 {
@@ -121,7 +122,7 @@ class BatchData
 {
 public:
   BatchData(
-      const std::vector<thrust::host_vector<char,thrust::system::cuda::experimental::pinned_allocator<char>>>& host_data) :
+      const std::vector<thrust::host_vector<char,allocator>>& host_data) :
       m_ptrs(),
       m_sizes(),
       m_data(),
@@ -149,9 +150,11 @@ public:
     m_ptrs = thrust::device_vector<void*>(uncompressed_ptrs);
     std::vector<size_t> sizes(m_size);
     for (size_t i = 0; i < sizes.size(); ++i) {
+//printf("%zd:sz=%zd\n", i, host_data[i].size());
       sizes[i] = host_data[i].size();
     }
     m_sizes = thrust::device_vector<size_t>(sizes);
+printf("n sizes=%zd\n", m_sizes.size());
 
     // copy data to GPU
     for (size_t i = 0; i < host_data.size(); ++i) {
@@ -174,6 +177,7 @@ public:
 
     std::vector<size_t> sizes(size(), max_output_size);
     m_sizes = thrust::device_vector<size_t>(sizes);
+printf("m_sizes.size=%zd , batch_size=%zd, max_output_size=%zd, datasize=%zd\n", m_sizes.size(), batch_size, max_output_size, m_data.size());
 
     std::vector<void*> ptrs(batch_size);
     for (size_t i = 0; i < batch_size; ++i) {
@@ -214,13 +218,14 @@ public:
   }
 
 private:
+public:
   thrust::device_vector<void*> m_ptrs;
   thrust::device_vector<size_t> m_sizes;
   thrust::device_vector<uint8_t> m_data;
   size_t m_size;
 };
 
-thrust::host_vector<char,thrust::system::cuda::experimental::pinned_allocator<char>> readFile(const std::string& filename)
+thrust::host_vector<char,allocator> readFile(const std::string& filename)
 {
   std::ifstream fin(filename, std::ifstream::binary);
   if (!fin) {
@@ -235,7 +240,7 @@ thrust::host_vector<char,thrust::system::cuda::experimental::pinned_allocator<ch
   auto fileSize = static_cast<std::streamoff>(fin.tellg());
   fin.seekg(0, std::ios_base::beg);
 
-  thrust::host_vector<char,thrust::system::cuda::experimental::pinned_allocator<char>> host_data(fileSize);
+  thrust::host_vector<char,allocator> host_data(fileSize);
   fin.read(host_data.data(), fileSize);
 
   if (!fin) {
@@ -248,9 +253,9 @@ thrust::host_vector<char,thrust::system::cuda::experimental::pinned_allocator<ch
 }
 
 
-std::vector<thrust::host_vector<char,thrust::system::cuda::experimental::pinned_allocator<char>>> readFileWithPageSizes(const std::string& filename)
+std::vector<thrust::host_vector<char,allocator>> readFileWithPageSizes(const std::string& filename)
 {
-  std::vector<thrust::host_vector<char,thrust::system::cuda::experimental::pinned_allocator<char>>> res;
+  std::vector<thrust::host_vector<char,allocator>> res;
 
   std::ifstream fin(filename, std::ifstream::binary);
 
@@ -268,15 +273,15 @@ std::vector<thrust::host_vector<char,thrust::system::cuda::experimental::pinned_
 
 
 //std::vector<std::vector<char>>
-std::vector<thrust::host_vector<char,thrust::system::cuda::experimental::pinned_allocator<char>>>
+std::vector<thrust::host_vector<char,allocator>>
 multi_file(const std::vector<std::string>& filenames, const size_t chunk_size,
     const bool has_page_sizes, const size_t num_duplicates)
 {
-  std::vector<thrust::host_vector<char,thrust::system::cuda::experimental::pinned_allocator<char>>> split_data;
+  std::vector<thrust::host_vector<char,allocator>> split_data;
 printf("has_page_sizes %d, chunk_size=%zd\n", has_page_sizes, chunk_size);
   for (auto const& filename : filenames) {
     if (!has_page_sizes) {
-      thrust::host_vector<char,thrust::system::cuda::experimental::pinned_allocator<char>> filedata = readFile(filename);
+      thrust::host_vector<char,allocator> filedata = readFile(filename);
 
       const size_t num_chunks
           = (filedata.size() + chunk_size - 1) / chunk_size;
@@ -285,13 +290,13 @@ printf("filedat.size=%zd, num_chunks=%zd\n", filedata.size(), num_chunks);
       for (size_t c = 0; c < num_chunks; ++c) {
         const size_t size_of_this_chunk = std::min(chunk_size, filedata.size()-offset); 
         split_data.emplace_back(
-            thrust::host_vector<char,thrust::system::cuda::experimental::pinned_allocator<char>>(filedata.data() + offset, 
+            thrust::host_vector<char,allocator>(filedata.data() + offset, 
                               filedata.data()+ offset + size_of_this_chunk));
         offset += size_of_this_chunk;
         assert(offset <= filedata.size());
       }
     } else {
-      std::vector<thrust::host_vector<char,thrust::system::cuda::experimental::pinned_allocator<char>>> filedata = readFileWithPageSizes(filename);
+      std::vector<thrust::host_vector<char,allocator>> filedata = readFileWithPageSizes(filename);
       split_data.insert(split_data.end(), filedata.begin(), filedata.end());
     }
   }
@@ -323,7 +328,7 @@ run_benchmark_template(
     DecompAsyncT BatchedDecompressAsync,
     IsInputValidT IsInputValid,
     const FormatOptsT format_opts,
-    const std::vector<thrust::host_vector<char,thrust::system::cuda::experimental::pinned_allocator<char>>>& data,
+    const std::vector<thrust::host_vector<char,allocator>>& data,
     const bool warmup,
     const size_t count,
     const bool csv_output,
@@ -337,20 +342,35 @@ run_benchmark_template(
 
   size_t total_bytes = 0;
   size_t chunk_size = 0;
-  for (const thrust::host_vector<char,thrust::system::cuda::experimental::pinned_allocator<char>>& part : data) {
+
+
+
+  // build up metadata
+  BatchData input_data(data);
+  const size_t batch_size = input_data.size();
+printf("batch_size=%zd\n", batch_size);
+  for (const thrust::host_vector<char,allocator>& part : data) {
     total_bytes += part.size();
     if (part.size() > chunk_size) {
       chunk_size = part.size();
     }
   }
+#if 1
+    std::vector<std::vector<uint8_t,allocator>>  exp_data_v(batch_size);
+    std::vector<std::vector<uint8_t,allocator>>  act_data_v(batch_size);
+	for(size_t i = 0; i < batch_size; i++){
+exp_data_v[i].resize(chunk_size);
+act_data_v[i].resize(chunk_size);
+//printf("e=%d, a=%d\n", exp_data_v[i].size(), act_data_v[i].size());
+	}
+#endif
 
-  // build up metadata
-  BatchData input_data(data);
+
+
 
   cudaStream_t stream;
   CUDA_CHECK(cudaStreamCreate(&stream));
 
-  const size_t batch_size = input_data.size();
 
   std::vector<size_t> h_input_sizes(batch_size);
   CUDA_CHECK(cudaMemcpy(h_input_sizes.data(), input_data.sizes(),
@@ -360,6 +380,19 @@ run_benchmark_template(
   double comp_time = 0.0;
   double decomp_time = 0.0;
   for (size_t iter = 0; iter < count; ++iter) {
+
+
+#if 1
+//printf("batch_size=%d\n", batch_size);
+      //std::vector<std::vector<uint8_t,allocator>>  exp_data_v(batch_size);
+      //std::vector<std::vector<uint8_t,allocator>>  act_data_v(batch_size);
+	for(size_t i = 0; i < batch_size; i++){
+//printf("i=%d,o=%d e=%d, a=%d\n", h_input_sizes[i],h_input_sizes[i], exp_data_v[i].size(), act_data_v[i].size());
+exp_data_v[i].resize(h_input_sizes[i]);
+act_data_v[i].resize(h_input_sizes[i]);
+	}
+#endif
+
     // compression
     nvcompStatus_t status;
 
@@ -385,6 +418,14 @@ run_benchmark_template(
     CUDA_CHECK(cudaEventCreate(&start));
     CUDA_CHECK(cudaEventCreate(&end));
     CUDA_CHECK(cudaEventRecord(start, stream));
+#if 0
+thrust::host_vector<size_t> h_sizes= compress_data.m_sizes;
+for(int i = 0; i < compress_data.size(); i++){
+		//h_sizes[i] = compress_data.m_sizes[i];
+        printf("0:cmp=%zd \n", h_sizes[i]);
+
+}
+#endif
 
     status = BatchedCompressAsync(
         input_data.ptrs(),
@@ -402,6 +443,14 @@ run_benchmark_template(
 
     CUDA_CHECK(cudaEventRecord(end, stream));
     CUDA_CHECK(cudaStreamSynchronize(stream));
+if(0){
+	thrust::host_vector<size_t> h_sizes= compress_data.m_sizes;
+	 h_sizes= compress_data.m_sizes;
+	for(int i = 0; i < compress_data.size(); i++){
+			printf("1:cmp=%zd \n", h_sizes[i]);
+
+	}
+}
 
     // free compression memory
     CUDA_CHECK(cudaFree(d_comp_temp));
@@ -421,6 +470,20 @@ run_benchmark_template(
     for (const size_t s : compressed_sizes_host) {
       comp_bytes += s;
     }
+	thrust::host_vector<uint8_t, allocator> decomp_vect(comp_bytes);
+	//int pos=0;
+	auto *dst=decomp_vect.data();
+	thrust::host_vector<void*, allocator_voidp> devptrs(compress_data.m_ptrs);
+
+cudaDeviceSynchronize();
+    for (int i=0; i < compressed_sizes_host.size(); i++) {
+		size_t s = compressed_sizes_host[i];
+printf("s=%zd\n", s);
+		CUDA_CHECK(cudaMemcpyAsync(dst, devptrs[i], s, cudaMemcpyDeviceToHost, stream));
+		dst += s;
+	}
+    CUDA_CHECK(cudaStreamSynchronize(stream));
+cudaDeviceSynchronize();
 
     // LZ4 decompression
     size_t decomp_temp_bytes;
@@ -495,28 +558,57 @@ run_benchmark_template(
     CUDA_CHECK(cudaFree(d_decomp_temp));
     CUDA_CHECK(cudaFree(d_decomp_sizes));
     CUDA_CHECK(cudaFree(d_decomp_statuses));
+#if 0
+printf("batch_size=%d\n", batch_size);
+      std::vector<std::vector<uint8_t,allocator>>  exp_data_v(batch_size);
+      std::vector<std::vector<uint8_t,allocator>>  act_data_v(batch_size);
+	for(size_t i = 0; i < batch_size; i++){
+//printf("i=%d,o=%d\n", h_input_sizes[i],h_decomp_sizes[i]);
+exp_data_v[i].resize(h_input_sizes[i]);
+act_data_v[i].resize(h_decomp_sizes[i]);
+	}
+#endif
 
     // only verify last iteration
     if (iter + 1 == count) {
       std::vector<void*> h_input_ptrs(batch_size);
-      CUDA_CHECK(cudaMemcpy(h_input_ptrs.data(), input_data.ptrs(),
+      CUDA_CHECK(cudaMemcpyAsync(h_input_ptrs.data(), input_data.ptrs(),
           sizeof(void*)*batch_size, cudaMemcpyDeviceToHost));
+cudaDeviceSynchronize();
+#if 0
+      std::vector<std::vector<uint8_t,allocator>>  exp_data_v(batch_size);
+      std::vector<std::vector<uint8_t,allocator>>  act_data_v(batch_size);
+	for(size_t i = 0; i < batch_size; i++){
+//printf("i=%d,o=%d\n", h_input_sizes[i],h_decomp_sizes[i]);
+exp_data_v[i].resize(h_input_sizes[i]);
+act_data_v[i].resize(h_decomp_sizes[i]);
+	}
+#endif
+
       for (size_t i = 0; i < batch_size; ++i) {
-        std::vector<uint8_t> exp_data(h_input_sizes[i]);
-        CUDA_CHECK(cudaMemcpy(exp_data.data(), h_input_ptrs[i],
+        //std::vector<uint8_t> exp_data(h_input_sizes[i]);
+        //CUDA_CHECK(cudaMemcpy(exp_data.data(), h_input_ptrs[i],
+/*
+        CUDA_CHECK(cudaMemcpyAsync(exp_data_v[i].data(), h_input_ptrs[i],
             h_input_sizes[i], cudaMemcpyDeviceToHost));
-        std::vector<uint8_t> act_data(h_decomp_sizes[i]);
-        CUDA_CHECK(cudaMemcpy(act_data.data(), h_output_ptrs[i],
+*/
+        //std::vector<uint8_t> act_data(h_decomp_sizes[i]);
+        //CUDA_CHECK(cudaMemcpy(act_data.data(), h_output_ptrs[i],
+        CUDA_CHECK(cudaMemcpyAsync(act_data_v[i].data(), h_output_ptrs[i],
             h_decomp_sizes[i], cudaMemcpyDeviceToHost));
+#if 0
         for (size_t j = 0; j < h_input_sizes[i]; ++j) {
           if (act_data[j] != exp_data[j]) {
             benchmark_assert(false, "Batch item decompressed output did not match input: i="+std::to_string(i) + ": j=" + std::to_string(j) + " act=" + std::to_string(act_data[j]) + " exp=" +
             std::to_string(exp_data[j]));
           }
         }
+#endif
       }
     }
 
+cudaDeviceSynchronize();
+CUDA_CHECK(cudaDeviceSynchronize());
     for (size_t i = 0; i < batch_size; ++i) {
       CUDA_CHECK(cudaFree(h_output_ptrs[i]));
     }
@@ -583,7 +675,7 @@ run_benchmark_template(
 }
 
 void run_benchmark(
-    const std::vector<thrust::host_vector<char,thrust::system::cuda::experimental::pinned_allocator<char>>>& data,
+    const std::vector<thrust::host_vector<char,allocator>>& data,
     const bool warmup,
     const size_t count,
     const bool csv_output,
